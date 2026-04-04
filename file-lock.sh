@@ -65,6 +65,28 @@ DEBUG_MODE="${DEBUG_MODE:-false}"
 # FUNCTIONS
 # ============================================================================
 
+# Format duration in seconds to human readable format (Xd Xh Xm Xs)
+# Arguments: $1 = duration in seconds
+format_duration() {
+    local total_seconds=$1
+    local days hours minutes seconds
+    
+    days=$((total_seconds / 86400))
+    total_seconds=$((total_seconds % 86400))
+    hours=$((total_seconds / 3600))
+    total_seconds=$((total_seconds % 3600))
+    minutes=$((total_seconds / 60))
+    seconds=$((total_seconds % 60))
+    
+    local result=""
+    [[ $days -gt 0 ]] && result="${days}d "
+    [[ $hours -gt 0 ]] && result="${result}${hours}h "
+    [[ $minutes -gt 0 ]] && result="${result}${minutes}m "
+    result="${result}${seconds}s"
+    
+    echo "$result"
+}
+
 # Parse rclone.conf and extract S3 configuration for a given section
 # Arguments: $1 = section name (e.g., "test")
 # Sets global variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_ENDPOINT_URL
@@ -622,26 +644,29 @@ main() {
     end_time=$(date +%s)
     duration_seconds=$((end_time - start_time))
     
+    local duration_formatted
+    duration_formatted=$(format_duration "$duration_seconds")
+    
     log "INFO" "========== SUMMARY =========="
     log "INFO" "Total objects: $grand_objects | Extended: $grand_extended | Skipped: $grand_skipped | Errors: $grand_errors"
-    log "INFO" "Duration: ${duration_seconds}s"
+    log "INFO" "Duration: $duration_formatted"
     
     # Send Uptime Kuma ping if configured
     if [[ -n "$UPTIME_KUMA_URL" && "$DRY_RUN" != "true" ]]; then
         local message
         if [[ $grand_errors -gt 0 ]]; then
             # Errors occurred - report down
-            message="ERRORS: ${grand_errors} errors, extended ${grand_extended} objects"
+            message="ERRORS: ${grand_errors} errors, extended ${grand_extended} objects in $duration_formatted"
             send_uptime_kuma "down" "$message"
             log "WARN" "Uptime Kuma ping sent (down): $message"
         elif [[ $grand_extended -eq 0 ]]; then
             # No objects extended - report down (possible issue)
-            message="WARNING: No objects extended (processed: ${grand_objects}, skipped: ${grand_skipped})"
+            message="WARNING: No objects extended (processed: ${grand_objects}, skipped: ${grand_skipped}) in $duration_formatted"
             send_uptime_kuma "down" "$message"
             log "WARN" "Uptime Kuma ping sent (down): $message"
         else
             # Success - report up
-            message="Extended ${grand_extended} objects in ${duration_seconds}s"
+            message="Extended ${grand_extended} objects in $duration_formatted"
             send_uptime_kuma "up" "$message"
             log "INFO" "Uptime Kuma ping sent (up): $message"
         fi
