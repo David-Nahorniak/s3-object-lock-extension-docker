@@ -2,6 +2,7 @@
 
 Automaticaly extends object lock retention for S3 buckets with Object Lock enabled. Designed for restic backup repositories to ensure data protection compliance.
 
+
 ## Features
 
 - Extends object lock retention by configurable number of days
