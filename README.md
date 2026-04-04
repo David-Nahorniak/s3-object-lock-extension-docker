@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="https://raw.githubusercontent.com/david-nahorniak/s3-object-lock-extension-docker/main/logo.png" alt="S3 Object Lock Extension Logo" width="200">
+</div>
+
 # S3 Object Lock Extension Docker Script
 
 Automaticaly extends object lock retention for S3 buckets with Object Lock enabled. Designed for restic backup repositories to ensure data protection compliance.
@@ -198,12 +202,14 @@ version: '3.8'
 
 services:
   s3-object-lock:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: s3-object-lock-extension-docker:latest
+    build: .
     container_name: s3-object-lock-extension-docker
-    restart: "no"
+    restart: always
+    # init: true is recommended when using CRON_SCHEDULE
+    # It enables Docker's init process (tini) which:
+    # 1. Reaps zombie processes spawned by cron jobs
+    # 2. Properly forwards signals (SIGTERM) for graceful shutdown
+    init: true
     volumes:
       - ./rclone.conf:/app/rclone.conf:ro
     environment:
@@ -216,6 +222,7 @@ services:
       - DRY_RUN=false
       - UPTIME_KUMA_URL=https://uptime-kuma.example.com/api/push/xxxxx
       - DEBUG_MODE=false
+      - TZ=Europe/Prague
       - CRON_SCHEDULE=0 3 * * 0
     logging:
       driver: "json-file"
