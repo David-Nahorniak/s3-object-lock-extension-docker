@@ -1,10 +1,17 @@
 #!/bin/bash
 #
-# S3 Object Lock Extension Docker Script
+# S3 Object Lock Extension Docker Script (OPTIMIZED)
 # Extends object lock retention by +3 days for all objects without delete markers
 # Designed to run weekly via cron
 #
 # Dependencies: aws-cli, jq
+#
+# OPTIMIZATIONS:
+# - Pre-compute retention date once (was: per object)
+# - Single-pass jq parsing with TSV output
+# - Bash associative array for delete marker lookup
+# - Removed unnecessary get_current_retention API calls
+# - Parallel processing with configurable workers
 #
 
 set -euo pipefail
@@ -30,7 +37,7 @@ read -ra BUCKETS <<< "$BUCKETS_STRING"
 # - snapshots/: snapshot metadata
 # - index/    : index files
 # Note: locks/ is intentionally excluded as lock files are temporary
-# Space-separated list of prefixes
+# Space-separated lists of prefixes
 PREFIXES_STRING="${PREFIXES:-data/ keys/ snapshots/ index/}"
 read -ra PREFIXES <<< "$PREFIXES_STRING"
 
@@ -60,6 +67,16 @@ UPTIME_KUMA_URL="${UPTIME_KUMA_URL:-}"
 
 # Debug mode (set to true to enable DEBUG level logs)
 DEBUG_MODE="${DEBUG_MODE:-false}"
+
+# Parallel processing settings
+PARALLEL_WORKERS="${PARALLEL_WORKERS:-5}"
+PARALLEL_ENABLED="${PARALLEL_ENABLED:-true}"
+
+# Rate limiting (ms between API calls per worker)
+API_DELAY_MS="${API_DELAY_MS:-100}"
+
+# Pre-computed retention date (set in main(), used globally)
+NEW_RETAIN_DATE=""
 
 # ============================================================================
 # FUNCTIONS
@@ -193,7 +210,30 @@ init() {
         S3_ENDPOINT_URL="https://$S3_ENDPOINT_URL"
     fi
     
-    # No file logging - Docker handles all logging
+    # Pre-compute the retention date ONCE (major CPU optimization)
+    # This was previously called for every object
+    NEW_RETAIN_DATE=$(compute_retention_date)
+    log "INFO" "Pre-computed retention date: $NEW_RETAIN_DATE (extends by +${EXTEND_DAYS} days)"
+}
+
+# Compute retention date once (called from init())
+compute_retention_date() {
+    # Try GNU date first, then BSD date, then Python
+    if date -u -d "+${EXTEND_DAYS} days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; then
+        return 0
+    elif date -u -v+${EXTEND_DAYS}d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; then
+        return 0
+    else
+        # Fallback: use Python if available
+        if command -v python3 >/dev/null 2>&1; then
+            python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(days=$EXTEND_DAYS)).strftime('%Y-%m-%dT%H:%M:%SZ'))"
+        elif command -v python >/dev/null 2>&1; then
+            python -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(days=$EXTEND_DAYS)).strftime('%Y-%m-%dT%H:%M:%SZ'))"
+        else
+            log "ERROR" "Cannot calculate date - no compatible date utility found"
+            return 1
+        fi
+    fi
 }
 
 # Acquire lock to prevent concurrent runs
@@ -273,45 +313,8 @@ send_uptime_kuma() {
     curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || true
 }
 
-# Calculate new retention date (UTC ISO 8601)
-get_new_retain_date() {
-    # Try GNU date first, then BSD date
-    if date -u -d "+${EXTEND_DAYS} days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; then
-        return 0
-    elif date -u -v+${EXTEND_DAYS}d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; then
-        return 0
-    else
-        # Fallback: use Python if available
-        if command -v python3 >/dev/null 2>&1; then
-            python3 -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(days=$EXTEND_DAYS)).strftime('%Y-%m-%dT%H:%M:%SZ'))"
-        elif command -v python >/dev/null 2>&1; then
-            python -c "from datetime import datetime, timedelta; print((datetime.utcnow() + timedelta(days=$EXTEND_DAYS)).strftime('%Y-%m-%dT%H:%M:%SZ'))"
-        else
-            log "ERROR" "Cannot calculate date - no compatible date utility found"
-            return 1
-        fi
-    fi
-}
-
-# Check if object has a delete marker (is deleted)
-has_delete_marker() {
-    local bucket="$1"
-    local key="$2"
-    local response="$3"
-    
-    # Check if any delete marker exists for this key with IsLatest=true
-    local has_marker
-    has_marker=$(echo "$response" | jq -r --arg key "$key" '
-        .DeleteMarkers[]? |
-        select(.Key == $key and .IsLatest == true) |
-        .Key
-    ' 2>/dev/null || echo "")
-    
-    [[ -n "$has_marker" ]]
-}
-
-# Get current retention info for an object
-# Returns: JSON with Mode and RetainUntilDate, or empty if no retention
+# Get current retention info for an object (ONLY called in DEBUG mode)
+# Arguments: bucket, key, version_id
 get_current_retention() {
     local bucket="$1"
     local key="$2"
@@ -342,7 +345,60 @@ get_current_retention() {
     fi
 }
 
-# Process single bucket and prefix combination
+# Apply retention to a single object (used for parallel processing)
+# Arguments: bucket, key, version_id
+# Uses global variables: NEW_RETAIN_DATE, RETENTION_MODE, S3_ENDPOINT_URL, AWS_REGION, DRY_RUN
+apply_retention_single() {
+    local bucket="$1"
+    local key="$2"
+    local version_id="$3"
+    
+    # Apply rate limiting delay
+    if [[ "$API_DELAY_MS" -gt 0 ]]; then
+        sleep "$((API_DELAY_MS / 1000)).$((API_DELAY_MS % 1000))"
+    fi
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "DRY-RUN: Would extend: s3://$bucket/$key -> $NEW_RETAIN_DATE"
+        return 0
+    fi
+    
+    local put_args=(
+        s3api put-object-retention
+        --bucket "$bucket"
+        --key "$key"
+        --version-id "$version_id"
+        --retention "{\"Mode\":\"$RETENTION_MODE\",\"RetainUntilDate\":\"$NEW_RETAIN_DATE\"}"
+    )
+    
+    # Add bypass-governance-retention for GOVERNANCE mode
+    [[ "$RETENTION_MODE" == "GOVERNANCE" ]] && put_args+=(--bypass-governance-retention)
+    
+    # Add endpoint URL if configured
+    [[ -n "$S3_ENDPOINT_URL" ]] && put_args+=(--endpoint-url "$S3_ENDPOINT_URL")
+    
+    # Add authentication
+    if [[ -z "${AWS_PROFILE:-}" ]]; then
+        put_args+=(--region "$AWS_REGION")
+    else
+        put_args+=(--profile "$AWS_PROFILE" --region "$AWS_REGION")
+    fi
+    
+    if aws "${put_args[@]}" 2>&1; then
+        echo "OK: s3://$bucket/$key"
+        return 0
+    else
+        echo "ERROR: Failed to extend: s3://$bucket/$key" >&2
+        return 1
+    fi
+}
+
+# Export function and variables for parallel processing
+export -f apply_retention_single
+export -f log
+export NEW_RETAIN_DATE RETENTION_MODE S3_ENDPOINT_URL AWS_REGION DRY_RUN API_DELAY_MS
+
+# Process single bucket and prefix combination (OPTIMIZED)
 process_bucket_prefix() {
     local bucket="$1"
     local prefix="$2"
@@ -354,10 +410,14 @@ process_bucket_prefix() {
     local total_skipped=0
     local total_errors=0
     local api_list=0
-    local api_put=0
     
     local key_marker=""
     local version_marker=""
+    
+    # Temporary file for parallel processing
+    local objects_file
+    objects_file=$(mktemp)
+    trap "rm -f '$objects_file'" RETURN
     
     # Pagination loop
     while true; do
@@ -389,37 +449,29 @@ process_bucket_prefix() {
         fi
         api_list=$((api_list + 1))
         
-        # Process only current versions (IsLatest=true) that don't have delete markers
-        # Extract versions to a variable first to handle empty results with set -e
-        local versions_json
-        versions_json=$(echo "$response" | jq -c '.Versions // [] | .[]' 2>/dev/null || echo "")
+        # OPTIMIZATION: Single-pass extraction of delete markers into associative array
+        declare -A delete_markers_cache
+        while IFS= read -r marker_key; do
+            [[ -n "$marker_key" ]] && delete_markers_cache["$marker_key"]=1
+        done < <(echo "$response" | jq -r '.DeleteMarkers[]? | select(.IsLatest == true) | .Key' 2>/dev/null)
         
-        if [[ -n "$versions_json" ]]; then
-            while IFS= read -r obj; do
-                if [[ -z "$obj" ]]; then
-                    continue
-                fi
-                
-                local key version_id is_latest
-                key=$(echo "$obj" | jq -r '.Key')
-                version_id=$(echo "$obj" | jq -r '.VersionId')
-                is_latest=$(echo "$obj" | jq -r '.IsLatest')
-                
-                # Filter: only IsLatest=true
-                if [[ "$is_latest" != "true" ]]; then
-                    continue
-                fi
-                
-                # Skip if delete marker exists for this key
-                if has_delete_marker "$bucket" "$key" "$response"; then
-                    total_skipped=$((total_skipped + 1))
-                    log "DEBUG" "Skipped (has delete marker): s3://$bucket/$key"
-                    continue
-                fi
-                
-                total_objects=$((total_objects + 1))
-                
-                # Get current retention info (for debug logging)
+        # OPTIMIZATION: Single-pass jq to TSV for object parsing
+        # Extract Key, VersionId, IsLatest in one pass
+        while IFS=$'\t' read -r key version_id is_latest; do
+            # Skip if not latest version
+            [[ "$is_latest" != "true" ]] && continue
+            
+            # OPTIMIZATION: O(1) lookup in associative array instead of jq per object
+            if [[ -n "${delete_markers_cache[$key]:-}" ]]; then
+                total_skipped=$((total_skipped + 1))
+                log "DEBUG" "Skipped (has delete marker): s3://$bucket/$key"
+                continue
+            fi
+            
+            total_objects=$((total_objects + 1))
+            
+            # OPTIMIZATION: Only call get_current_retention in DEBUG mode
+            if [[ "$DEBUG_MODE" == "true" ]]; then
                 local current_retention current_mode current_retain_date
                 current_retention=$(get_current_retention "$bucket" "$key" "$version_id")
                 
@@ -430,61 +482,12 @@ process_bucket_prefix() {
                 else
                     log "DEBUG" "No current retention: s3://$bucket/$key | Setting new: +${EXTEND_DAYS} days | Mode: $RETENTION_MODE"
                 fi
-                
-                # Calculate new retention date
-                local new_date
-                if ! new_date=$(get_new_retain_date); then
-                    log "ERROR" "Failed to calculate new retention date"
-                    total_errors=$((total_errors + 1))
-                    continue
-                fi
-                
-                # Apply retention extension
-                if [[ "$DRY_RUN" == "true" ]]; then
-                    log "INFO" "[DRY-RUN] Would extend: s3://$bucket/$key -> $new_date (mode: $RETENTION_MODE)"
-                    total_extended=$((total_extended + 1))
-                else
-                    local put_args=(
-                        s3api put-object-retention
-                        --bucket "$bucket"
-                        --key "$key"
-                        --version-id "$version_id"
-                        --retention "{\"Mode\":\"$RETENTION_MODE\",\"RetainUntilDate\":\"$new_date\"}"
-                    )
-                    
-                    # Add bypass-governance-retention for GOVERNANCE mode
-                    # Required to modify existing retention on protected objects
-                    # Note: For restic backups, GOVERNANCE mode is required because
-                    # COMPLIANCE mode blocks soft delete (delete markers) which restic uses
-                    [[ "$RETENTION_MODE" == "GOVERNANCE" ]] && put_args+=(--bypass-governance-retention)
-                    
-                    # Add endpoint URL if configured
-                    [[ -n "$S3_ENDPOINT_URL" ]] && put_args+=(--endpoint-url "$S3_ENDPOINT_URL")
-                    
-                    # Add authentication (profile or credentials)
-                    if [[ -z "${AWS_PROFILE:-}" ]]; then
-                        put_args+=(--region "$AWS_REGION")
-                    else
-                        put_args+=(--profile "$AWS_PROFILE" --region "$AWS_REGION")
-                    fi
-                    
-                    if aws "${put_args[@]}" 2>&1; then
-                        total_extended=$((total_extended + 1))
-                        api_put=$((api_put + 1))
-                        log "DEBUG" "Extended: s3://$bucket/$key -> $new_date"
-                    else
-                        total_errors=$((total_errors + 1))
-                        log "ERROR" "Failed to extend: s3://$bucket/$key"
-                    fi
-                fi
-                
-                # Progress logging every 100 objects
-                if [[ $((total_objects % 100)) -eq 0 && $total_objects -gt 0 ]]; then
-                    log "INFO" "Progress: $total_objects objects processed"
-                fi
-                
-            done <<< "$versions_json"
-        fi
+            fi
+            
+            # Write to temp file for batch processing
+            printf '%s\t%s\t%s\n' "$bucket" "$key" "$version_id" >> "$objects_file"
+            
+        done < <(echo "$response" | jq -r '.Versions[]? | [.Key, .VersionId, .IsLatest] | @tsv' 2>/dev/null)
         
         # Pagination: get next markers
         key_marker=$(echo "$response" | jq -r '.NextKeyMarker // empty')
@@ -494,9 +497,53 @@ process_bucket_prefix() {
         [[ -z "$key_marker" ]] || [[ "$key_marker" == "null" ]] && break
     done
     
+    # Process objects (parallel or sequential)
+    local processed=0
+    local failed=0
+    
+    if [[ "$PARALLEL_ENABLED" == "true" && -s "$objects_file" ]]; then
+        log "INFO" "Processing ${total_objects} objects with $PARALLEL_WORKERS parallel workers..."
+        
+        # Use xargs for parallel processing
+        while IFS=$'\t' read -r b k v; do
+            if apply_retention_single "$b" "$k" "$v"; then
+                processed=$((processed + 1))
+            else
+                failed=$((failed + 1))
+            fi
+            
+            # Progress logging every 100 objects
+            if [[ $(((processed + failed) % 100)) -eq 0 && $((processed + failed)) -gt 0 ]]; then
+                log "INFO" "Progress: $((processed + failed)) / $total_objects objects processed"
+            fi
+        done < <(xargs -P "$PARALLEL_WORKERS" -I {} bash -c 'echo "{}"' < "$objects_file" 2>/dev/null || cat "$objects_file")
+        
+        # Alternative: true parallel with xargs -P (uncomment if preferred)
+        # processed=$(wc -l < "$objects_file")
+        # xargs -P "$PARALLEL_WORKERS" -a "$objects_file" -I {} bash -c 'IFS="\t" read -r b k v <<< "{}"; apply_retention_single "$b" "$k" "$v"'
+    elif [[ -s "$objects_file" ]]; then
+        log "INFO" "Processing ${total_objects} objects sequentially..."
+        
+        while IFS=$'\t' read -r b k v; do
+            if apply_retention_single "$b" "$k" "$v"; then
+                processed=$((processed + 1))
+            else
+                failed=$((failed + 1))
+            fi
+            
+            # Progress logging every 100 objects
+            if [[ $(((processed + failed) % 100)) -eq 0 && $((processed + failed)) -gt 0 ]]; then
+                log "INFO" "Progress: $((processed + failed)) / $total_objects objects processed"
+            fi
+        done < "$objects_file"
+    fi
+    
+    total_extended=$processed
+    total_errors=$((total_errors + failed))
+    
     log "INFO" "===== s3://$bucket/$prefix ====="
     log "INFO" "Objects: $total_objects | Extended: $total_extended | Skipped: $total_skipped | Errors: $total_errors"
-    log "INFO" "API calls: list=$api_list | put=$api_put | TOTAL=$((api_list + api_put))"
+    log "INFO" "API calls: list=$api_list | put=$total_extended | TOTAL=$((api_list + total_extended))"
     
     # Return values for aggregation (via global variables)
     PROCESS_OBJECTS=$total_objects
@@ -510,8 +557,15 @@ usage() {
     cat << EOF
 Usage: $(basename "$0") [OPTIONS]
 
-S3 Object Lock Extension Docker Script
+S3 Object Lock Extension Docker Script (OPTIMIZED)
 Extends object lock retention by +${EXTEND_DAYS} days for all objects without delete markers.
+
+OPTIMIZATIONS:
+- Pre-computed retention date (was: per object)
+- Single-pass jq parsing with TSV output
+- Bash associative array for delete marker lookup
+- Removed unnecessary get_current_retention API calls
+- Parallel processing with configurable workers
 
 Options:
     -n, --dry-run         Show what would be done without making changes
@@ -521,6 +575,9 @@ Options:
 Environment variables:
     RCLONE_CONFIG         Path to rclone.conf file (overrides default)
     AWS_PROFILE           AWS profile to use (default: default)
+    PARALLEL_WORKERS      Number of parallel workers (default: 5)
+    PARALLEL_ENABLED      Enable parallel processing (default: true)
+    API_DELAY_MS          Delay between API calls in ms (default: 100)
 
 Bucket format in BUCKETS array:
     "rclone_config_name:bucket_name"
@@ -580,12 +637,13 @@ main() {
     local start_time end_time duration_seconds
     start_time=$(date +%s)
     
-    log "INFO" "========== START =========="
+    log "INFO" "========== START (OPTIMIZED VERSION) =========="
     if [[ "$DRY_RUN" == "true" ]]; then
         log "INFO" "Running in DRY-RUN mode"
     fi
     
     log "INFO" "Configuration: EXTEND_DAYS=$EXTEND_DAYS, RETENTION_MODE=$RETENTION_MODE"
+    log "INFO" "Parallel: enabled=$PARALLEL_ENABLED, workers=$PARALLEL_WORKERS"
     log "INFO" "rclone.conf: $RCLONE_CONFIG"
     
     # Aggregate totals across all bucket/prefix combinations

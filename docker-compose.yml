@@ -45,6 +45,11 @@ services:
       # Debug mode
       - DEBUG_MODE=false
       
+      # Parallel processing settings (OPTIMIZATION)
+      - PARALLEL_ENABLED=true
+      - PARALLEL_WORKERS=5
+      - API_DELAY_MS=100
+      
       # Timezone (use host timezone)
       - TZ=Europe/Prague
       
