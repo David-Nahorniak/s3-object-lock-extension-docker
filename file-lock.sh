@@ -509,14 +509,42 @@ process_bucket_prefix() {
         export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DEBUG_MODE EXTEND_DAYS
         export -f apply_retention_single log get_current_retention
         
-        # Use GNU parallel or xargs for true parallel processing
-        # Each line in objects_file is: bucket\tkey\tversion_id
-        local results_file
-        results_file=$(mktemp)
+        # Create temp directory for job tracking (works in non-interactive shells)
+        local job_dir
+        job_dir=$(mktemp -d)
+        local results_file="$job_dir/results"
+        touch "$results_file"
         
-        # Process with xargs -P (parallel) - each line triggers a bash subprocess
+        # Counter for job IDs
+        local job_id=0
+        local active_jobs=0
+        
+        # Process with background jobs using file-based semaphore
         while IFS=$'\t' read -r b k v; do
-            # Run in background and capture PID
+            # Wait if we have too many active jobs (file-based counting)
+            while true; do
+                # Count running jobs by checking which PID files still have running processes
+                active_jobs=0
+                for pid_file in "$job_dir"/pid_*; do
+                    [[ -f "$pid_file" ]] || continue
+                    local pid
+                    pid=$(cat "$pid_file" 2>/dev/null)
+                    # Check if process is still running
+                    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                        active_jobs=$((active_jobs + 1))
+                    else
+                        # Clean up stale PID file
+                        rm -f "$pid_file" 2>/dev/null
+                    fi
+                done
+                
+                if [[ $active_jobs -lt $PARALLEL_WORKERS ]]; then
+                    break
+                fi
+                sleep 0.05
+            done
+            
+            # Run in background and track with PID file
             (
                 if apply_retention_single "$b" "$k" "$v"; then
                     echo "OK" >> "$results_file"
@@ -525,10 +553,10 @@ process_bucket_prefix() {
                 fi
             ) &
             
-            # Limit concurrent jobs to PARALLEL_WORKERS
-            while [[ $(jobs -r | wc -l) -ge "$PARALLEL_WORKERS" ]]; do
-                sleep 0.1
-            done
+            # Store PID for tracking
+            echo $! > "$job_dir/pid_$job_id"
+            job_id=$((job_id + 1))
+            
         done < "$objects_file"
         
         # Wait for all background jobs to complete
@@ -537,7 +565,7 @@ process_bucket_prefix() {
         # Count results
         processed=$(grep -c "^OK$" "$results_file" 2>/dev/null || echo 0)
         failed=$(grep -c "^FAIL$" "$results_file" 2>/dev/null || echo 0)
-        rm -f "$results_file"
+        rm -rf "$job_dir"
         
         log "INFO" "Parallel processing complete: $processed succeeded, $failed failed"
         
@@ -556,6 +584,15 @@ process_bucket_prefix() {
                 log "INFO" "Progress: $((processed + failed)) / $total_objects objects processed"
             fi
         done < "$objects_file"
+    fi
+    
+    # INTEGRITY CHECK: Verify all objects were processed
+    local total_processed=$((processed + failed))
+    if [[ $total_processed -ne $total_objects ]]; then
+        log "WARNING" "INTEGRITY CHECK FAILED: Expected $total_objects objects, but processed $total_processed (succeeded: $processed, failed: $failed)"
+        log "WARNING" "This indicates a bug in parallel processing - some objects may have been missed or duplicated!"
+    else
+        log "INFO" "Integrity check passed: $total_processed objects processed as expected"
     fi
     
     total_extended=$processed
