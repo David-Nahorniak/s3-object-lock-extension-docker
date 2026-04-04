@@ -2,6 +2,13 @@
 
 Automaticaly extends object lock retention for S3 buckets with Object Lock enabled. Designed for restic backup repositories to ensure data protection compliance.
 
+> ⚠️ **WARNING - BETA VERSION**
+>
+> This is a **beta version** and is **NOT intended for production deployment**.
+>
+> This software is provided "as is" without warranty of any kind, express or implied. Use at your own risk. The author assumes no liability for any damages, data loss, or other issues that may arise from using this software.
+>
+> **This code was generated with AI assistance.** While efforts have been made to ensure correctness, there may be bugs, errors, or unintended behaviors. Thoroughly test in a non-production environment before any production consideration.
 
 ## Features
 
