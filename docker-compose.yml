@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  s3-object-lock:
+    image: ghcr.io/david-nahorniak/s3-object-lock-extension-docker:latest
+    container_name: s3-object-lock-extension-docker
+    restart: always
+    # Mount rclone config (read-only)
+    volumes:
+      - ./rclone.conf:/app/rclone.conf:ro
+    
+    # All configuration via environment variables
+    environment:
+      # Path to rclone config file
+      - RCLONE_CONFIG=/app/rclone.conf
+      
+      # Buckets to process (space-separated, format: "config_name:bucket_name")
+      # Single bucket: "config_name:bucket_name"
+      # Multiple buckets: "config1:bucket1 config1:bucket2 config2:bucket3"
+      - BUCKETS=default:my-bucket
+      
+      # Prefixes to process (space-separated)
+      - PREFIXES=data/ keys/ snapshots/ index/
+      
+      # Retention settings
+      - EXTEND_DAYS=3
+      - RETENTION_MODE=GOVERNANCE  # GOVERNANCE or COMPLIANCE
+      
+      # AWS settings (optional - usually populated from rclone.conf)
+      # - AWS_ACCESS_KEY_ID=
+      # - AWS_SECRET_ACCESS_KEY=
+      # - AWS_REGION=
+      # - S3_ENDPOINT_URL=
+      - AWS_PROFILE=default
+      
+      # Dry run mode (set to true for testing)
+      - DRY_RUN=false
+      
+      # Uptime Kuma push URL (optional - for monitoring)
+      - UPTIME_KUMA_URL=
+      
+      # Debug mode
+      - DEBUG_MODE=false
+      
+      # Timezone (use host timezone)
+      - TZ=Europe/Prague
+      
+      # Cron schedule (runs every day at 8:00 local time)
+      - CRON_SCHEDULE=0 8 * * *
+    
+    # Logging configuration (Docker handles all logging)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

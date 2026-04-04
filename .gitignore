@@ -1,0 +1,20 @@
+# S3 credentials - NEVER commit this file
+rclone.conf
+
+# Editor/IDE files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker volumes (if created locally)
+.docker/
+
+# Log files
+*.log
