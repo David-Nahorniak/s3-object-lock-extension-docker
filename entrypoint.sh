@@ -9,7 +9,7 @@ if [ -n "$CRON_SCHEDULE" ]; then
     # Create crontab file for root user
     # Format: minute hour day month weekday command
     # IMPORTANT: Must end with empty line for dcron
-    printf "%s /app/file-lock.sh\n\n" "$CRON_SCHEDULE" > /etc/crontabs/root
+    printf "%s /app/file-lock.sh >> /proc/1/fd/1 2>> /proc/1/fd/2\n\n" "$CRON_SCHEDULE" > /etc/crontabs/root
     
     # Set proper ownership and permissions (dcron requires 600 and root ownership)
     chown root:root /etc/crontabs/root

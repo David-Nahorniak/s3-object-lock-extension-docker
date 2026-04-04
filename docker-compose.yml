@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   s3-object-lock:
-    image: ghcr.io/david-nahorniak/s3-object-lock-extension-docker:latest
+    build: .
+    # image: ghcr.io/david-nahorniak/s3-object-lock-extension-docker:latest
     container_name: s3-object-lock-extension-docker
     restart: always
     # Required for dcron to spawn processes

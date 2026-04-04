@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #
 # S3 Object Lock Extension Docker Script
