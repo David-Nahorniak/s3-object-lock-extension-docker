@@ -5,6 +5,8 @@ services:
     image: ghcr.io/david-nahorniak/s3-object-lock-extension-docker:latest
     container_name: s3-object-lock-extension-docker
     restart: always
+    # Required for dcron to spawn processes
+    init: true
     # Mount rclone config (read-only)
     volumes:
       - ./rclone.conf:/app/rclone.conf:ro
