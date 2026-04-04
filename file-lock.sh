@@ -504,23 +504,43 @@ process_bucket_prefix() {
     if [[ "$PARALLEL_ENABLED" == "true" && -s "$objects_file" ]]; then
         log "INFO" "Processing ${total_objects} objects with $PARALLEL_WORKERS parallel workers..."
         
-        # Use xargs for parallel processing
-        while IFS=$'\t' read -r b k v; do
-            if apply_retention_single "$b" "$k" "$v"; then
-                processed=$((processed + 1))
-            else
-                failed=$((failed + 1))
-            fi
-            
-            # Progress logging every 100 objects
-            if [[ $(((processed + failed) % 100)) -eq 0 && $((processed + failed)) -gt 0 ]]; then
-                log "INFO" "Progress: $((processed + failed)) / $total_objects objects processed"
-            fi
-        done < <(xargs -P "$PARALLEL_WORKERS" -I {} bash -c 'echo "{}"' < "$objects_file" 2>/dev/null || cat "$objects_file")
+        # Export all needed variables for parallel workers
+        export RETENTION_MODE NEW_RETAIN_DATE S3_ENDPOINT_URL AWS_REGION AWS_PROFILE DRY_RUN API_DELAY_MS
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DEBUG_MODE EXTEND_DAYS
+        export -f apply_retention_single log get_current_retention
         
-        # Alternative: true parallel with xargs -P (uncomment if preferred)
-        # processed=$(wc -l < "$objects_file")
-        # xargs -P "$PARALLEL_WORKERS" -a "$objects_file" -I {} bash -c 'IFS="\t" read -r b k v <<< "{}"; apply_retention_single "$b" "$k" "$v"'
+        # Use GNU parallel or xargs for true parallel processing
+        # Each line in objects_file is: bucket\tkey\tversion_id
+        local results_file
+        results_file=$(mktemp)
+        
+        # Process with xargs -P (parallel) - each line triggers a bash subprocess
+        while IFS=$'\t' read -r b k v; do
+            # Run in background and capture PID
+            (
+                if apply_retention_single "$b" "$k" "$v"; then
+                    echo "OK" >> "$results_file"
+                else
+                    echo "FAIL" >> "$results_file"
+                fi
+            ) &
+            
+            # Limit concurrent jobs to PARALLEL_WORKERS
+            while [[ $(jobs -r | wc -l) -ge "$PARALLEL_WORKERS" ]]; do
+                sleep 0.1
+            done
+        done < "$objects_file"
+        
+        # Wait for all background jobs to complete
+        wait
+        
+        # Count results
+        processed=$(grep -c "^OK$" "$results_file" 2>/dev/null || echo 0)
+        failed=$(grep -c "^FAIL$" "$results_file" 2>/dev/null || echo 0)
+        rm -f "$results_file"
+        
+        log "INFO" "Parallel processing complete: $processed succeeded, $failed failed"
+        
     elif [[ -s "$objects_file" ]]; then
         log "INFO" "Processing ${total_objects} objects sequentially..."
         
