@@ -45,6 +45,9 @@ services:
       # Debug mode
       - DEBUG_MODE=false
       
+      # Permission test on startup
+      # - RUN_PERMISSIONS_TEST_ON_STARTUP=false   # Options: false (skip), true (run before main process), only (run and exit)
+      
       # Parallel processing settings (OPTIMIZATION)
       - PARALLEL_ENABLED=true
       - PARALLEL_WORKERS=5

@@ -65,6 +65,7 @@ docker-compose run -d -e CRON_SCHEDULE="0 3 * * 0" s3-object-lock
 | `PARALLEL_ENABLED` | Enable parallel processing | `true` | No |
 | `PARALLEL_WORKERS` | Number of parallel workers | `5` | No |
 | `API_DELAY_MS` | Delay between API calls (ms) | `100` | No |
+| `RUN_PERMISSIONS_TEST_ON_STARTUP` | Run permission test on startup: `false` (skip), `true` (run before main process), `only` (run and exit) | `false` | No |
 
 ### rclone.conf Format
 
@@ -235,6 +236,7 @@ The script will send:
 | File | Description |
 |------|-------------|
 | `file-lock.sh` | Main script |
+| `test-permissions.sh` | Permission testing script |
 | `entrypoint.sh` | Docker entrypoint (handles cron) |
 | `Dockerfile` | Docker image definition |
 | `docker-compose.yml` | Docker Compose configuration |
@@ -326,6 +328,129 @@ docker-compose run --rm -e DRY_RUN=true s3-object-lock
 7. **Image pull errors**
    - Make sure the image is public in GitHub Container Registry
    - Go to Package settings → Change visibility to Public
+
+## Permission Testing (test-permissions.sh)
+
+The `test-permissions.sh` script verifies that your S3 credentials have the correct permissions for restic backup operations with object lock extension.
+
+### Purpose
+
+This tool is designed for **S3 providers that do not support IAM policy editing** and only offer a GUI for managing access keys. Many S3-compatible storage providers (like IDrive E2, MinIO, etc.) have simplified permission management where you can only:
+- Create/delete access keys
+- Enable/disable specific permissions via checkboxes in a web interface
+
+This script helps you verify that all required permissions are properly enabled in the provider's GUI.
+
+### Usage
+
+```bash
+# Basic usage (uses ./rclone.conf by default)
+./test-permissions.sh
+
+# With custom rclone config path
+RCLONE_CONFIG=/path/to/rclone.conf ./test-permissions.sh
+
+# Test specific buckets (override BUCKETS variable)
+BUCKETS="myconfig:my-bucket" ./test-permissions.sh
+```
+
+### Automatic Permission Test on Container Startup
+
+You can configure the container to run the permission test automatically at startup using the `RUN_PERMISSIONS_TEST_ON_STARTUP` environment variable:
+
+| Value | Behavior |
+|-------|----------|
+| `false` | Skip permission test (default) |
+| `true` | Run permission test before starting the main process (cron or one-time run) |
+| `only` | Run permission test and exit (useful for verifying configuration before deployment) |
+
+**Example - Run test before main process:**
+```yaml
+environment:
+  - RUN_PERMISSIONS_TEST_ON_STARTUP=true
+  - CRON_SCHEDULE=0 8 * * *
+```
+
+**Example - Run test only and exit:**
+```yaml
+environment:
+  - RUN_PERMISSIONS_TEST_ON_STARTUP=only
+```
+
+This is useful for:
+- Verifying S3 permissions before deploying to production
+- CI/CD pipelines to validate configuration
+- Troubleshooting permission issues
+
+### Required Permissions
+
+For restic + object lock extension to work correctly, enable these permissions in your S3 provider's GUI:
+
+| Permission | Purpose |
+|------------|---------|
+| `s3:ListBucket` | List objects in bucket |
+| `s3:GetObject` | Read object data |
+| `s3:PutObject` | Upload new objects |
+| `s3:DeleteObject` | Delete objects (for cleanup) |
+| `s3:ListBucketVersions` | List all object versions |
+| `s3:GetBucketVersioning` | Check versioning status |
+| `s3:PutBucketVersioning` | Enable versioning (if needed) |
+| `s3:GetObjectRetention` | Read object lock retention |
+| `s3:PutObjectRetention` | Set/extend object lock retention |
+| `s3:GetBucketObjectLockConfiguration` | Read object lock config |
+
+### Dangerous Permissions
+
+These permissions should be **DISABLED** for security:
+
+| Permission | Risk |
+|------------|------|
+| `s3:BypassGovernanceRetention` | Allows bypassing governance mode locks |
+
+### Output Interpretation
+
+| Status | Meaning |
+|--------|---------|
+| `GRANTED` | Permission is available |
+| `DENIED` | Permission is not available |
+| `SKIPPED` | Test skipped (e.g., bucket without object lock) |
+| `N/A` | Not applicable (e.g., IAM tests on non-AWS providers) |
+
+### Example Output
+
+```
+========================================
+BUCKET CONFIGURATION
+========================================
+Versioning:    ✓ Enabled
+Object Lock:   ✓ Enabled
+Retention Mode: GOVERNANCE
+========================================
+
+TEST NAME                                          | ACCESS          | STATUS
+---------------------------------------------------+-----------------+----------------
+List Bucket Contents (s3:ListBucket)               | GRANTED         | OK
+Put Object (s3:PutObject)                          | GRANTED         | OK
+Get Object (s3:GetObject)                          | GRANTED         | OK
+Delete Object (s3:DeleteObject)                    | GRANTED         | OK
+Put Object Retention (s3:PutObjectRetention)       | GRANTED         | OK
+Bypass Governance Retention (s3:BypassGovernanceRetention) | DENIED          | OK
+```
+
+### Notes for Specific Providers
+
+#### IDrive E2
+- Enable "Object Lock" in bucket settings
+- Required permissions are set per access key in the GUI
+- `s3:BypassGovernanceRetention` should be disabled for backup accounts
+
+#### MinIO
+- Use `mc admin policy` to create custom policies
+- Object lock requires bucket creation with `--with-lock` flag
+
+#### AWS S3
+- Use IAM policies for fine-grained control
+- This script can also test IAM permissions (PutUserPolicy, etc.)
 
 ## License
 

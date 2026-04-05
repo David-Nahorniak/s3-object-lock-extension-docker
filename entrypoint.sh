@@ -1,5 +1,22 @@
 #!/bin/sh
 
+# Run permission test if requested
+if [ "$RUN_PERMISSIONS_TEST_ON_STARTUP" = "true" ] || [ "$RUN_PERMISSIONS_TEST_ON_STARTUP" = "only" ]; then
+    echo "Running permission test..."
+    /app/test-permissions.sh
+    TEST_EXIT_CODE=$?
+    
+    if [ $TEST_EXIT_CODE -ne 0 ]; then
+        echo "Permission test failed with exit code: $TEST_EXIT_CODE"
+    fi
+    
+    # If "only" mode, exit after test
+    if [ "$RUN_PERMISSIONS_TEST_ON_STARTUP" = "only" ]; then
+        echo "Exiting after permission test (RUN_PERMISSIONS_TEST_ON_STARTUP=only)"
+        exit $TEST_EXIT_CODE
+    fi
+fi
+
 # If CRON_SCHEDULE is set, run as cron daemon
 if [ -n "$CRON_SCHEDULE" ]; then
     # Ensure crontabs directory exists for dcron

@@ -16,8 +16,9 @@ WORKDIR /app
 
 # Copy scripts
 COPY file-lock.sh /app/file-lock.sh
+COPY test-permissions.sh /app/test-permissions.sh
 COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/file-lock.sh /app/entrypoint.sh
+RUN chmod +x /app/file-lock.sh /app/test-permissions.sh /app/entrypoint.sh
 
 # Create directory for rclone config
 RUN mkdir -p /root/.config/rclone
