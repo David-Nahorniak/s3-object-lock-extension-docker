@@ -23,7 +23,7 @@ services:
       - BUCKETS=default:my-bucket
       
       # Prefixes to process (space-separated)
-      - PREFIXES=data/ keys/ snapshots/ index/
+      - PREFIXES=config data/ keys/ snapshots/ index/
       
       # Retention settings
       - EXTEND_DAYS=3

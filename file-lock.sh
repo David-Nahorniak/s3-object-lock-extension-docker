@@ -32,13 +32,14 @@ read -ra BUCKETS <<< "$BUCKETS_STRING"
 
 # Prefixes to process for each bucket (appropriate for restic backups)
 # These folders contain the actual backup data that should be protected:
+# - config    : repository configuration file (critical)
 # - data/     : actual backup data chunks
 # - keys/     : encryption keys (critical)
 # - snapshots/: snapshot metadata
 # - index/    : index files
 # Note: locks/ is intentionally excluded as lock files are temporary
 # Space-separated lists of prefixes
-PREFIXES_STRING="${PREFIXES:-data/ keys/ snapshots/ index/}"
+PREFIXES_STRING="${PREFIXES:-config data/ keys/ snapshots/ index/}"
 read -ra PREFIXES <<< "$PREFIXES_STRING"
 
 # Retention settings

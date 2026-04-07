@@ -54,7 +54,7 @@ docker-compose run -d -e CRON_SCHEDULE="0 3 * * 0" s3-object-lock
 |----------|-------------|---------|----------|
 | `RCLONE_CONFIG` | Path to rclone config file | `/app/rclone.conf` | No |
 | `BUCKETS` | Space-separated list of buckets (format: `config_name:bucket_name`) | `test:test` | Yes |
-| `PREFIXES` | Space-separated list of prefixes to process | `data/ keys/ snapshots/ index/` | No |
+| `PREFIXES` | Space-separated list of prefixes to process | `config data/ keys/ snapshots/ index/` | No |
 | `EXTEND_DAYS` | Number of days to extend retention | `3` | No |
 | `RETENTION_MODE` | Retention mode: `GOVERNANCE` or `COMPLIANCE` | `GOVERNANCE` | No |
 | `AWS_PROFILE` | AWS profile name | `default` | No |
@@ -97,12 +97,16 @@ Format: `rclone_config_name:bucket_name`
 
 Default prefixes are optimized for restic backup repositories:
 
-- `data/` - Backup data chunks
-- `keys/` - Encryption keys (critical)
-- `snapshots/` - Snapshot metadata
-- `index/` - Index files
+| File/Directory | Description | Governance Retention | Reason (Versioning Context) |
+|----------------|-------------|---------------------|-----------------------------|
+| `config` | Repository configuration | ✅ YES | New version on upgrade. Old version stays 14 days as backup. |
+| `data/` | Pack files with backup data | ✅ YES | New packs are added. During prune, deleted packs are kept 14 days as protection against accidental deletion. |
+| `index/` | Index files | ✅ YES | Rewriting creates new version, old one stays 14 days. No maintenance issues. |
+| `keys/` | Encrypted keys | ⚠️ With caution | Adding new key works. Deleting compromised key creates delete marker, but file version stays in history. |
+| `locks/` | Locks for concurrent access | ❌ NO | Restic expects locks to disappear immediately after operation. With versioning they stay 14 days in history → risk of locks/ overflow. |
+| `snapshots/` | Backup metadata | ✅ YES | On forget, delete marker is created, but version stays 14 days → ransomware protection. |
 
-The `locks/` directory is intentionally excluded as lock files are temporary.
+> ⚠️ **Note**: `locks/` is intentionally excluded as lock files are temporary and should not be retained.
 
 ### Parallel Processing (Performance Optimization)
 
