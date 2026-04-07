@@ -9,7 +9,9 @@ RUN apk add --no-cache \
     tzdata \
     python3 \
     py3-pip \
-    && pip3 install --no-cache-dir --break-system-packages awscli
+    ca-certificates \
+    && pip3 install --no-cache-dir --break-system-packages awscli \
+    && update-ca-certificates
 
 # Create app directory
 WORKDIR /app

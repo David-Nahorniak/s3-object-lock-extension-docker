@@ -14,7 +14,7 @@ RCLONE_CONFIG="${RCLONE_CONFIG:-./rclone.conf}"
 # Buckets to test (same format as file-lock.sh)
 # Format: "rclone_config_name:bucket_name" (space-separated for multiple)
 # Example: "test:my-backup-bucket" where [test] is the rclone config section
-BUCKETS_STRING="${BUCKETS:-test:test}"
+BUCKETS_STRING="${BUCKETS}"
 read -ra BUCKETS <<< "$BUCKETS_STRING"
 
 TEST_PREFIX="s3-object-lock-test"
@@ -181,7 +181,7 @@ print_results_table() {
     echo ""
 }
 
-# Check if bucket exists, create if not
+# Check if bucket exists
 ensure_test_bucket() {
     local endpoint="$1"
     local region="$2"
@@ -196,16 +196,6 @@ ensure_test_bucket() {
     if [[ "$result" == SUCCESS* ]]; then
         return 0
     fi
-    
-    # Try to create bucket
-    result=$(run_aws_cmd "$endpoint" "$region" "$access_key" "$secret_key" \
-             s3api create-bucket --bucket "$bucket")
-    
-    if [[ "$result" == SUCCESS* ]]; then
-        log "INFO" "Created test bucket: $bucket"
-        return 0
-    fi
-    
     return 1
 }
 
@@ -1170,8 +1160,15 @@ run_all_tests() {
     TEST_RESULTS=()
     
     # Ensure bucket exists
-    if ! ensure_test_bucket "$endpoint" "$region" "$access_key" "$secret_key" "$bucket"; then
-        log "WARN" "Could not access or create bucket: $bucket"
+    local bucket_check_result
+    bucket_check_result=$(run_aws_cmd "$endpoint" "$region" "$access_key" "$secret_key" \
+         s3api head-bucket --bucket "$bucket")
+    
+    if [[ "$bucket_check_result" != SUCCESS* ]]; then
+        local error_msg
+        error_msg=$(echo "$bucket_check_result" | sed 's/FAILED|//')
+        log "WARN" "Could not access bucket: $bucket"
+        log "WARN" "Error: $error_msg"
     fi
     
     # Detect bucket configuration
