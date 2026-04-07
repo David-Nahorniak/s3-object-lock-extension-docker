@@ -562,9 +562,9 @@ process_bucket_prefix() {
         # Wait for all background jobs to complete
         wait
         
-        # Count results
-        processed=$(grep -c "^OK$" "$results_file" 2>/dev/null || echo 0)
-        failed=$(grep -c "^FAIL$" "$results_file" 2>/dev/null || echo 0)
+        # Count results - use tr to strip any whitespace/newlines
+        processed=$(grep -c "^OK$" "$results_file" 2>/dev/null | tr -d '[:space:]' || echo 0)
+        failed=$(grep -c "^FAIL$" "$results_file" 2>/dev/null | tr -d '[:space:]' || echo 0)
         rm -rf "$job_dir"
         
         log "INFO" "Parallel processing complete: $processed succeeded, $failed failed"
