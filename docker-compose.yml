@@ -34,7 +34,6 @@ services:
       # - AWS_SECRET_ACCESS_KEY=
       # - AWS_REGION=
       # - S3_ENDPOINT_URL=
-      - AWS_PROFILE=default
       
       # Dry run mode (set to true for testing)
       - DRY_RUN=false

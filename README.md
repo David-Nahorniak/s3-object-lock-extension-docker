@@ -57,7 +57,6 @@ docker-compose run -d -e CRON_SCHEDULE="0 3 * * 0" s3-object-lock
 | `PREFIXES` | Space-separated list of prefixes to process | `config data/ keys/ snapshots/ index/` | No |
 | `EXTEND_DAYS` | Number of days to extend retention | `3` | No |
 | `RETENTION_MODE` | Retention mode: `GOVERNANCE` or `COMPLIANCE` | `GOVERNANCE` | No |
-| `AWS_PROFILE` | AWS profile name | `default` | No |
 | `DRY_RUN` | Enable dry-run mode (no changes) | `false` | No |
 | `DEBUG_MODE` | Enable debug logging | `false` | No |
 | `UPTIME_KUMA_URL` | Uptime Kuma push URL for monitoring | (empty) | No |
@@ -269,7 +268,6 @@ services:
       - PREFIXES=data/ keys/ snapshots/ index/
       - EXTEND_DAYS=7
       - RETENTION_MODE=GOVERNANCE
-      - AWS_PROFILE=default
       - DRY_RUN=false
       - UPTIME_KUMA_URL=https://uptime-kuma.example.com/api/push/xxxxx
       - DEBUG_MODE=false

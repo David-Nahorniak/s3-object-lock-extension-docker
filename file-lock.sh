@@ -52,9 +52,6 @@ AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
 AWS_REGION="${AWS_REGION:-}"
 S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-}"
 
-# AWS profile (optional - used if credentials not set above)
-AWS_PROFILE="${AWS_PROFILE:-default}"
-
 # Lock file to prevent concurrent runs
 LOCK_FILE="/var/run/s3-object-lock-extension-docker.lock"
 LOCK_TIMEOUT=3600  # 1 hour
@@ -202,8 +199,6 @@ init() {
         export AWS_ACCESS_KEY_ID
         export AWS_SECRET_ACCESS_KEY
         export AWS_REGION
-        # Clear AWS_PROFILE to use credentials directly
-        unset AWS_PROFILE
     fi
     
     # Add https:// to endpoint URL if missing scheme
@@ -331,12 +326,8 @@ get_current_retention() {
     # Add endpoint URL if configured
     [[ -n "$S3_ENDPOINT_URL" ]] && args+=(--endpoint-url "$S3_ENDPOINT_URL")
     
-    # Add authentication
-    if [[ -z "${AWS_PROFILE:-}" ]]; then
-        args+=(--region "$AWS_REGION")
-    else
-        args+=(--profile "$AWS_PROFILE" --region "$AWS_REGION")
-    fi
+    # Add region
+    args+=(--region "$AWS_REGION")
     
     local retention
     if retention=$(aws "${args[@]}" 2>/dev/null); then
@@ -378,12 +369,8 @@ apply_retention_single() {
     # Add endpoint URL if configured
     [[ -n "$S3_ENDPOINT_URL" ]] && put_args+=(--endpoint-url "$S3_ENDPOINT_URL")
     
-    # Add authentication
-    if [[ -z "${AWS_PROFILE:-}" ]]; then
-        put_args+=(--region "$AWS_REGION")
-    else
-        put_args+=(--profile "$AWS_PROFILE" --region "$AWS_REGION")
-    fi
+    # Add region
+    put_args+=(--region "$AWS_REGION")
     
     if aws "${put_args[@]}" 2>&1; then
         echo "OK: s3://$bucket/$key"
@@ -432,12 +419,8 @@ process_bucket_prefix() {
         # Add endpoint URL if configured
         [[ -n "$S3_ENDPOINT_URL" ]] && args+=(--endpoint-url "$S3_ENDPOINT_URL")
         
-        # Add authentication (profile or credentials)
-        if [[ -z "${AWS_PROFILE:-}" ]]; then
-            args+=(--region "$AWS_REGION")
-        else
-            args+=(--profile "$AWS_PROFILE" --region "$AWS_REGION")
-        fi
+        # Add region
+        args+=(--region "$AWS_REGION")
         
         [[ -n "$key_marker" ]] && args+=(--key-marker "$key_marker")
         [[ -n "$version_marker" ]] && args+=(--version-id-marker "$version_marker")
@@ -506,7 +489,7 @@ process_bucket_prefix() {
         log "INFO" "Processing ${total_objects} objects with $PARALLEL_WORKERS parallel workers..."
         
         # Export all needed variables for parallel workers
-        export RETENTION_MODE NEW_RETAIN_DATE S3_ENDPOINT_URL AWS_REGION AWS_PROFILE DRY_RUN API_DELAY_MS
+        export RETENTION_MODE NEW_RETAIN_DATE S3_ENDPOINT_URL AWS_REGION DRY_RUN API_DELAY_MS
         export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DEBUG_MODE EXTEND_DAYS
         export -f apply_retention_single log get_current_retention
         
@@ -632,7 +615,6 @@ Options:
 
 Environment variables:
     RCLONE_CONFIG         Path to rclone.conf file (overrides default)
-    AWS_PROFILE           AWS profile to use (default: default)
     PARALLEL_WORKERS      Number of parallel workers (default: 5)
     PARALLEL_ENABLED      Enable parallel processing (default: true)
     API_DELAY_MS          Delay between API calls in ms (default: 100)
@@ -734,7 +716,6 @@ main() {
         export AWS_ACCESS_KEY_ID
         export AWS_SECRET_ACCESS_KEY
         export AWS_REGION
-        unset AWS_PROFILE
         
         # Add https:// to endpoint URL if missing scheme
         if [[ -n "$S3_ENDPOINT_URL" && ! "$S3_ENDPOINT_URL" =~ ^https?:// ]]; then
