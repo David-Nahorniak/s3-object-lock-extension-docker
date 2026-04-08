@@ -131,12 +131,14 @@ run_aws_cmd() {
     shift 4
     local args=("$@")
     
+    # Build the aws command arguments (same approach as file-lock.sh)
+    local aws_args=("${args[@]}" --region "$region")
+    [[ -n "$endpoint" ]] && aws_args+=(--endpoint-url "$endpoint")
+    
     local result
     if result=$(AWS_ACCESS_KEY_ID="$access_key" \
                 AWS_SECRET_ACCESS_KEY="$secret_key" \
-                aws "${args[@]}" \
-                --region "$region" \
-                ${endpoint:+--endpoint-url "$endpoint"} \
+                aws "${aws_args[@]}" \
                 2>&1); then
         echo "SUCCESS|$result"
     else

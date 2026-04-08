@@ -3,6 +3,8 @@
 # Run permission test if requested
 if [ "$RUN_PERMISSIONS_TEST_ON_STARTUP" = "true" ] || [ "$RUN_PERMISSIONS_TEST_ON_STARTUP" = "only" ]; then
     echo "Running permission test..."
+    echo "RCLONE_CONFIG=$RCLONE_CONFIG"
+    echo "BUCKETS=$BUCKETS"
     /app/test-permissions.sh
     TEST_EXIT_CODE=$?
     
